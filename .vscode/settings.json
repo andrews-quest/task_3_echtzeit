@@ -1,0 +1,13 @@
+{
+    "makefile.makefilePath": "/home/student/sources/frameworks/FreeRTOS/FreeRTOS/Aufgaben/Template/Makefile",
+    "makefile.launchConfigurations": [
+        {
+            "cwd": "/home/student/sources/frameworks/FreeRTOS/FreeRTOS/Aufgaben/Template/build",
+            "binaryPath": "/home/student/sources/frameworks/FreeRTOS/FreeRTOS/Aufgaben/Template",
+            "binaryArgs": []
+        }
+    ],
+    "files.associations": {
+        "*.old": "c"
+    }
+}

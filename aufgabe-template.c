@@ -6,13 +6,14 @@
 #include "task.h"     /* RTOS task related API prototypes. */
 #include "queue.h"    /* RTOS queue related API prototypes. */
 #include "timers.h"   /* Software timer related API prototypes. */
-#include "semphr.h"   /* Semaphore related API prototypes. */
+#include "semphr.h"   /* Semaphore related API prototypes. */ 
 
 #include <ncurses.h>
 #include <stdlib.h>
 
 #define N_TASKS 10
 #define mainKEYBOARD_TASK_PRIORITY          ( tskIDLE_PRIORITY + 0 )
+#define INCLUDE_vTaskDelete 1
 
 /*
  * The tasks as described in the comments at the top of this file.
@@ -20,8 +21,7 @@
 static void vKeyHitTask( void *pvParameters );
 static void vIncrementFunktion(void *pvParameters);
 static void vGlobalManager(void *pvParameters);
-
-xSemaphore = xSemaphoreCreateCounting(10,0);
+SemaphoreHandle_t xSemaphore;
 
 /* A software timer that is started from the tick hook. */
 bool quit = false;
@@ -35,15 +35,22 @@ bool bStop = pdFALSE;
 /*** SEE THE COMMENTS AT THE TOP OF THIS FILE ***/
 void main_rtos( void )
 {
-	for(int i=1;i<N_TASKS;i++){
+	xSemaphore = xSemaphoreCreateCounting(10,0);
+	
+	if(xSemaphore != NULL){
+		for(int i=1;i<N_TASKS;i++){
 		xTaskCreate( vIncrementFunktion,			    /* The function that implements the task. */
 			"Increment Global Variable", 	
 			configMINIMAL_STACK_SIZE, 		/* The size of the stack to allocate to the task. */
 			(void*) i, 					  	    /* The parameter passed to the task - not used in this simple case. */
 			mainKEYBOARD_TASK_PRIORITY,     /* The priority assigned to the task. */
 			NULL );
+
 		mvprintw(10, 0, "Task %d", 0);
-	}
+
+		xSemaphoreTake(xSemaphore,0);
+		}
+
 
 	xTaskCreate(vGlobalManager, "Global Manager", configMINIMAL_STACK_SIZE, NULL, mainKEYBOARD_TASK_PRIORITY, NULL );
 	
@@ -53,6 +60,11 @@ void main_rtos( void )
 	*pvGlobalVariable = 0;
 
 	vTaskStartScheduler();
+
+	}else{
+		mvprintw(1, 1, "Critical Semaphore Error! Restart the Program!");
+	}
+	
 
 
 	/* If all is well, the scheduler will now be running, and the following
@@ -73,11 +85,13 @@ static void vGlobalManager(void *pvParameters){
 	for( ;; ){
 		taskENTER_CRITICAL();
 		mvprintw(15, 0, "Global Variable: %d", *pvGlobalVariable);
+		mvprintw(15,0,"");
 		refresh();
 		taskEXIT_CRITICAL();
 
-		if(*pvGlobalVariable == 1000){
+		if(*pvGlobalVariable >= 1000){
 			bStop = pdTRUE;
+			vTaskDelete(NULL);
 		}
 	};
 }
@@ -88,29 +102,36 @@ static void vIncrementFunktion(void *pvParameters) {
 	u_int32_t localVar;
 
 	//mvprintw(25+task_number, task_number*6, "Task finished: %d", localVar);
+	
+	if(xSemaphoreTake(xSemaphore, 0) == pdFALSE){
+		
 
-	taskENTER_CRITICAL();
-	mvprintw(5+task_number, 0, "Task %d", task_number);
-	mvprintw(5+task_number, 15, "running...");
-	refresh;
-	taskEXIT_CRITICAL();
+			taskENTER_CRITICAL();
+			mvprintw(5+task_number, 0, "Task %d", task_number);
+			mvprintw(5+task_number, 15, "running...");
+			refresh();
+			taskEXIT_CRITICAL();
 
-	for(;;){
-		localVar = *pvGlobalVariable;
-		vTaskDelay(pdMS_TO_TICKS(task_number*100));
-		localVar = localVar+1;
-		vTaskDelay(pdMS_TO_TICKS(task_number*100));
-		*pvGlobalVariable = localVar;
+			for(;;){
+				localVar = *pvGlobalVariable;
+				vTaskDelay(pdMS_TO_TICKS(task_number*10));
+				localVar = localVar+1;
+				vTaskDelay(pdMS_TO_TICKS(task_number*10));
+				*pvGlobalVariable = localVar;
 
 
+			
+
+			if (bStop == pdTRUE){
+				taskENTER_CRITICAL();
+				mvprintw(5+task_number, 15, "Task finished: %d", localVar);
+				refresh();
+				taskEXIT_CRITICAL();
+				vTaskDelete(NULL);
+			}
+			}
 	}
-
-	if (bStop == pdTRUE){
-		taskENTER_CRITICAL();
-		mvprintw(5+task_number, 15, "Task finished: %d", localVar);
-		refresh;
-		taskEXIT_CRITICAL();
-	}
+	
 }
 
 

@@ -4,9 +4,10 @@
 /* Kernel includes. */
 #include "FreeRTOS.h" /* Must come first. */
 #include "task.h"     /* RTOS task related API prototypes. */
-#include "queue.h"    /* RTOS queue related API prototypes. */
+#include "queue.h"    /* RTOS queue related API prototypes.*/
 #include "timers.h"   /* Software timer related API prototypes. */
 #include "semphr.h"   /* Semaphore related API prototypes. */ 
+#include "string.h"
 
 #include <ncurses.h>
 #include <stdlib.h>
@@ -14,9 +15,9 @@
 #define N_TASKS 10
 #define mainKEYBOARD_TASK_PRIORITY          ( tskIDLE_PRIORITY + 0 )
 #define INCLUDE_vTaskDelete 1
-#define TUNNING_INDICATOR_RELOAD_TIME pdMS_TO_TICKS(100)
+#define TUNNING_INDICATOR_RELOAD_TIME pdMS_TO_TICKS(700)
 
-char cRunningIndicatorStates[4][12] = {"running", "running.", "running..", "running..."};
+char cRunningIndicatorStates[4][15] = {"running   ", "running.  ", "running.. ", "running..."};
 u_int8_t ucRunningIndicatorCounter[10] = {0,0,0,0,0,0,0,0,0,0};
 
 /*
@@ -118,48 +119,52 @@ static void vGlobalManager(void *pvParameters){
 	};
 }
 
-TimerCallbackFunction_t vRunningIndicatorOutput(u_int8_t ucTaskNumber){
-		char sIndicator = 0;
-	if(xSemaphoreTake(xRunningIndicatorMutex,0) == pdTRUE){
-		u_int8_t ucCycleCounter = ucRunningIndicatorCounter[ucTaskNumber-1];
-		//u_int8_t ucCycleCounte = 0;
-		char sIndicator = cRunningIndicatorStates[ucCycleCounter];
-		
-		if(ucCycleCounter >= 3){
-			ucCycleCounter = 0;
-		}else{
-			ucCycleCounter = ucCycleCounter + 1;
-		}
-		//char sIndicator = 0;
-		ucRunningIndicatorCounter[ucTaskNumber-1] = ucCycleCounter;
-		xSemaphoreGive(xRunningIndicatorMutex);
+
+TimerCallbackFunction_t vRunningIndicatorOutput(TimerHandle_t xRunningIndicatorTimer){
+	u_int8_t ucTaskNumber = (u_int8_t)pvTimerGetTimerID(xRunningIndicatorTimer);
+	u_int8_t ucCycleCounter = ucRunningIndicatorCounter[1];
+	char sIndicator[15];
+	strcpy(sIndicator,cRunningIndicatorStates[ucCycleCounter]);
+	
+	if(ucCycleCounter >= 3){
+		ucCycleCounter = 0;
+	}else{
+		ucCycleCounter = ucCycleCounter + 1;
 	}
+
+	ucRunningIndicatorCounter[ucTaskNumber-2] = ucCycleCounter;
+
 	
 	taskENTER_CRITICAL();
 	mvprintw(5+ucTaskNumber, 15, "%s", sIndicator);
-	//mvprintw(5+ucTaskNumber, 25, "%d", ucCycleCounter);
 	refresh();
 	taskEXIT_CRITICAL();
+
+	if(bStop == pdTRUE){
+		bRunningIndicatorStop = pdTRUE;
+		vTaskDelete(NULL);
+	}
+
 }
 
-static void vRunningIndicatorTask(void *pvParameters){
-	u_int8_t ucTaskNumber = (u_int8_t) pvParameters;
-	
-	xRunningIndicatorTimer = xTimerCreate("Running Indicator Timer",
-										TUNNING_INDICATOR_RELOAD_TIME,
-										pdTRUE,
-										(void*) 0,
-										vRunningIndicatorOutput(ucTaskNumber));
-	xTimerStart(xRunningIndicatorTimer,0);
 
-	for(;;){
-		if(bStop == pdTRUE){
-			bRunningIndicatorStop = pdTRUE;
-			vTaskDelete(NULL);
-		}
+static void vRunningIndicatorTask(void *pvParameters){
+	if(xSemaphoreTake(xSemaphore, 0) == pdFALSE){
+		u_int8_t ucTaskNumber = (u_int8_t) pvParameters;
+
+		xRunningIndicatorTimer = xTimerCreate("Running Indicator Timer",
+											TUNNING_INDICATOR_RELOAD_TIME,
+											pdTRUE,
+											(void*) ucTaskNumber,
+											vRunningIndicatorOutput);
+		xTimerStart(xRunningIndicatorTimer,0);
+
+		for(;;){
+		}	
 	}
 	
 }
+
 
 /*-----------------------------------------------------------*/
 static void vIncrementFunktion(void *pvParameters) {
@@ -179,7 +184,6 @@ static void vIncrementFunktion(void *pvParameters) {
 				if(xSemaphoreTake(xGlobalVariableSemaphore,portMAX_DELAY) == pdTRUE){
 					localVar = *pvGlobalVariable;
 					xSemaphoreGive(xGlobalVariableSemaphore);
-
 				}	
 					vTaskDelay(pdMS_TO_TICKS(task_number));
 					localVar = localVar+1;
@@ -187,12 +191,9 @@ static void vIncrementFunktion(void *pvParameters) {
 				if(xSemaphoreTake(xGlobalVariableSemaphore,portMAX_DELAY) == pdTRUE){
 					*pvGlobalVariable = localVar;
 					xSemaphoreGive(xGlobalVariableSemaphore);
-
 				}
 					
-
-
-				if (bStop == pdTRUE){
+				if (bStop == pdTRUE & bRunningIndicatorStop == pdTRUE){
 					taskENTER_CRITICAL();
 					mvprintw(5+task_number, 15, "Task finished: %d", localVar);
 					refresh();

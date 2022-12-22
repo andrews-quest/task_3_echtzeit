@@ -14,6 +14,10 @@
 #define N_TASKS 10
 #define mainKEYBOARD_TASK_PRIORITY          ( tskIDLE_PRIORITY + 0 )
 #define INCLUDE_vTaskDelete 1
+#define TUNNING_INDICATOR_RELOAD_TIME pdMS_TO_TICKS(100)
+
+char cRunningIndicatorStates[4][12] = {"running", "running.", "running..", "running..."};
+u_int8_t ucRunningIndicatorCounter[10] = {0,0,0,0,0,0,0,0,0,0};
 
 /*
  * The tasks as described in the comments at the top of this file.
@@ -21,13 +25,19 @@
 static void vKeyHitTask( void *pvParameters );
 static void vIncrementFunktion(void *pvParameters);
 static void vGlobalManager(void *pvParameters);
+static void vRunningIndicatorTask(void *pvParameters);
+
 SemaphoreHandle_t xSemaphore;
+SemaphoreHandle_t xGlobalVariableSemaphore;
+SemaphoreHandle_t xRunningIndicatorMutex;
+TimerHandle_t xRunningIndicatorTimer;
 
 /* A software timer that is started from the tick hook. */
 bool quit = false;
 int TaskData[N_TASKS];
 u_int32_t * pvGlobalVariable;
 bool bStop = pdFALSE;
+bool bRunningIndicatorStop = pdFALSE;
 
 
 /*-----------------------------------------------------------*/
@@ -36,6 +46,9 @@ bool bStop = pdFALSE;
 void main_rtos( void )
 {
 	xSemaphore = xSemaphoreCreateCounting(10,0);
+	xGlobalVariableSemaphore = xSemaphoreCreateMutex();
+	xRunningIndicatorMutex = xSemaphoreCreateMutex();
+	xSemaphoreGive(xGlobalVariableSemaphore);
 	
 	if(xSemaphore != NULL){
 		for(int i=1;i<N_TASKS;i++){
@@ -48,18 +61,25 @@ void main_rtos( void )
 
 		mvprintw(10, 0, "Task %d", 0);
 
+		xTaskCreate(vRunningIndicatorTask,
+					"Running Indicator",
+					configMINIMAL_STACK_SIZE,
+					(void*) i,
+					mainKEYBOARD_TASK_PRIORITY,
+					NULL );	
+
 		xSemaphoreTake(xSemaphore,0);
 		}
 
 
-	xTaskCreate(vGlobalManager, "Global Manager", configMINIMAL_STACK_SIZE, NULL, mainKEYBOARD_TASK_PRIORITY, NULL );
-	
-	xTaskCreate(vKeyHitTask, "Keyboard", configMINIMAL_STACK_SIZE, NULL, mainKEYBOARD_TASK_PRIORITY, NULL );
+		xTaskCreate(vGlobalManager, "Global Manager", configMINIMAL_STACK_SIZE, NULL, mainKEYBOARD_TASK_PRIORITY, NULL );
+		
+		xTaskCreate(vKeyHitTask, "Keyboard", configMINIMAL_STACK_SIZE, NULL, mainKEYBOARD_TASK_PRIORITY, NULL );
 
-	pvGlobalVariable = (u_int32_t*)pvPortMalloc(sizeof(u_int32_t));
-	*pvGlobalVariable = 0;
+		pvGlobalVariable = (u_int32_t*)pvPortMalloc(sizeof(u_int32_t));
+		*pvGlobalVariable = 0;
 
-	vTaskStartScheduler();
+		vTaskStartScheduler();
 
 	}else{
 		mvprintw(1, 1, "Critical Semaphore Error! Restart the Program!");
@@ -72,8 +92,7 @@ void main_rtos( void )
 	there was insufficient FreeRTOS heap memory available for the idle and/or
 	timer tasks	to be created.  See the memory management section on the
 	FreeRTOS web site for more details. */
-	for( ;; ){
-	};
+	for(;;){};
 }
 
 /*
@@ -84,16 +103,62 @@ void vRunningIndicator(u_int32_t ulTaskID){
 static void vGlobalManager(void *pvParameters){
 	for( ;; ){
 		taskENTER_CRITICAL();
-		mvprintw(15, 0, "Global Variable: %d", *pvGlobalVariable);
+		if(xSemaphoreTake(xGlobalVariableSemaphore,portMAX_DELAY) == pdTRUE){
+			mvprintw(15, 0, "Global Variable: %d", *pvGlobalVariable);
+			xSemaphoreGive(xGlobalVariableSemaphore);
+		}
 		mvprintw(15,0,"");
 		refresh();
-		taskEXIT_CRITICAL();
+		taskEXIT_CRITICAL();	
 
 		if(*pvGlobalVariable >= 1000){
 			bStop = pdTRUE;
 			vTaskDelete(NULL);
-		}
+		}	
 	};
+}
+
+TimerCallbackFunction_t vRunningIndicatorOutput(u_int8_t ucTaskNumber){
+		char sIndicator = 0;
+	if(xSemaphoreTake(xRunningIndicatorMutex,0) == pdTRUE){
+		u_int8_t ucCycleCounter = ucRunningIndicatorCounter[ucTaskNumber-1];
+		//u_int8_t ucCycleCounte = 0;
+		char sIndicator = cRunningIndicatorStates[ucCycleCounter];
+		
+		if(ucCycleCounter >= 3){
+			ucCycleCounter = 0;
+		}else{
+			ucCycleCounter = ucCycleCounter + 1;
+		}
+		//char sIndicator = 0;
+		ucRunningIndicatorCounter[ucTaskNumber-1] = ucCycleCounter;
+		xSemaphoreGive(xRunningIndicatorMutex);
+	}
+	
+	taskENTER_CRITICAL();
+	mvprintw(5+ucTaskNumber, 15, "%s", sIndicator);
+	//mvprintw(5+ucTaskNumber, 25, "%d", ucCycleCounter);
+	refresh();
+	taskEXIT_CRITICAL();
+}
+
+static void vRunningIndicatorTask(void *pvParameters){
+	u_int8_t ucTaskNumber = (u_int8_t) pvParameters;
+	
+	xRunningIndicatorTimer = xTimerCreate("Running Indicator Timer",
+										TUNNING_INDICATOR_RELOAD_TIME,
+										pdTRUE,
+										(void*) 0,
+										vRunningIndicatorOutput(ucTaskNumber));
+	xTimerStart(xRunningIndicatorTimer,0);
+
+	for(;;){
+		if(bStop == pdTRUE){
+			bRunningIndicatorStop = pdTRUE;
+			vTaskDelete(NULL);
+		}
+	}
+	
 }
 
 /*-----------------------------------------------------------*/
@@ -104,31 +169,36 @@ static void vIncrementFunktion(void *pvParameters) {
 	//mvprintw(25+task_number, task_number*6, "Task finished: %d", localVar);
 	
 	if(xSemaphoreTake(xSemaphore, 0) == pdFALSE){
-		
 
 			taskENTER_CRITICAL();
 			mvprintw(5+task_number, 0, "Task %d", task_number);
-			mvprintw(5+task_number, 15, "running...");
 			refresh();
 			taskEXIT_CRITICAL();
 
 			for(;;){
-				localVar = *pvGlobalVariable;
-				vTaskDelay(pdMS_TO_TICKS(task_number*10));
-				localVar = localVar+1;
-				vTaskDelay(pdMS_TO_TICKS(task_number*10));
-				*pvGlobalVariable = localVar;
+				if(xSemaphoreTake(xGlobalVariableSemaphore,portMAX_DELAY) == pdTRUE){
+					localVar = *pvGlobalVariable;
+					xSemaphoreGive(xGlobalVariableSemaphore);
+
+				}	
+					vTaskDelay(pdMS_TO_TICKS(task_number));
+					localVar = localVar+1;
+					vTaskDelay(pdMS_TO_TICKS(task_number));
+				if(xSemaphoreTake(xGlobalVariableSemaphore,portMAX_DELAY) == pdTRUE){
+					*pvGlobalVariable = localVar;
+					xSemaphoreGive(xGlobalVariableSemaphore);
+
+				}
+					
 
 
-			
-
-			if (bStop == pdTRUE){
-				taskENTER_CRITICAL();
-				mvprintw(5+task_number, 15, "Task finished: %d", localVar);
-				refresh();
-				taskEXIT_CRITICAL();
-				vTaskDelete(NULL);
-			}
+				if (bStop == pdTRUE){
+					taskENTER_CRITICAL();
+					mvprintw(5+task_number, 15, "Task finished: %d", localVar);
+					refresh();
+					taskEXIT_CRITICAL();
+					vTaskDelete(NULL);
+				}
 			}
 	}
 	
@@ -158,7 +228,7 @@ static void vKeyHitTask(void *pvParameters) {
 				endwin();
 				exit(2);
 			}
-			case 160: { //spacebar
+			case 20: { //spacebar
  				main_rtos();
 			}
 			default:
